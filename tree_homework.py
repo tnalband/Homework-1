@@ -3,7 +3,7 @@
 
 # %% (1) Verify packages  -- should print 113.34
 import ragtop.blackscholes
-print(ragtop.blackscholes.black_scholes(-1, 625, 612, 0.05, 0.75, 0.62, borrow_cost=0.011))
+print(ragtop.blackscholes.black_scholes(-1, 625, 612, 0.05, 0.75, 0.62, borrow_cost=0.011))   # ragtop returns a dict
 
 # %% (2) Imports
 import math
@@ -11,6 +11,19 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from ragtop.blackscholes import black_scholes
+
+
+def ragtop_price(res):
+    """Pull the option price out of whatever ragtop returns (it returns a dict)."""
+    if isinstance(res, dict):
+        for key in res:
+            if str(key).lower() in ("price", "value", "px", "prices"):
+                return float(np.asarray(res[key]).squeeze())
+        for key in res:
+            if "price" in str(key).lower():
+                return float(np.asarray(res[key]).squeeze())
+        raise KeyError(f"No price-like key found. Keys are: {list(res.keys())}")
+    return float(np.asarray(res).squeeze())
 
 
 # %% CRR binomial tree. Same signature as ragtop.black_scholes, plus `steps` and `american`.
@@ -45,7 +58,7 @@ for n in (1, 5, 10, 50, 100, 500):
     eu = crr_tree(-1, spot, strike, rate, time, vol, n, american=False, borrow_cost=q)
     am = crr_tree(-1, spot, strike, rate, time, vol, n, american=True, borrow_cost=q)
     print(f"N={n:4d}  European={eu:9.5f}  American={am:9.5f}  American>=European: {am >= eu}")
-print("Black-Scholes European put:", black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q))
+print("Black-Scholes European put:", ragtop_price(black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)))
 
 # %% Closed-form Black-Scholes (independent of ragtop) as a cross-check
 def bs_formula(callput, spot, strike, rate, time, vol, borrow_cost=0.0):
@@ -57,8 +70,9 @@ def bs_formula(callput, spot, strike, rate, time, vol, borrow_cost=0.0):
 
 
 # %% Build the data set: European put, near the money, N = 1..500
-# ragtop may return an array/object, so force it into a plain float first.
-bs_ragtop = float(np.asarray(black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)).squeeze())
+res = black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)
+print("ragtop returned:", res)
+bs_ragtop = ragtop_price(res)
 bs_closed = bs_formula(-1, spot, strike, rate, time, vol, borrow_cost=q)
 print("BS ragtop:", bs_ragtop, "| BS closed form:", bs_closed)
 bs_price = bs_ragtop if np.isfinite(bs_ragtop) else bs_closed
