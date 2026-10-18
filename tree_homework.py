@@ -47,8 +47,21 @@ for n in (1, 5, 10, 50, 100, 500):
     print(f"N={n:4d}  European={eu:9.5f}  American={am:9.5f}  American>=European: {am >= eu}")
 print("Black-Scholes European put:", black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q))
 
+# %% Closed-form Black-Scholes (independent of ragtop) as a cross-check
+def bs_formula(callput, spot, strike, rate, time, vol, borrow_cost=0.0):
+    Phi = lambda x: 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+    d1 = (math.log(spot / strike) + (rate - borrow_cost + 0.5 * vol ** 2) * time) / (vol * math.sqrt(time))
+    d2 = d1 - vol * math.sqrt(time)
+    return callput * (spot * math.exp(-borrow_cost * time) * Phi(callput * d1)
+                      - strike * math.exp(-rate * time) * Phi(callput * d2))
+
+
 # %% Build the data set: European put, near the money, N = 1..500
-bs_price = black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)
+# ragtop may return an array/object, so force it into a plain float first.
+bs_ragtop = float(np.asarray(black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)).squeeze())
+bs_closed = bs_formula(-1, spot, strike, rate, time, vol, borrow_cost=q)
+print("BS ragtop:", bs_ragtop, "| BS closed form:", bs_closed)
+bs_price = bs_ragtop if np.isfinite(bs_ragtop) else bs_closed
 rows = []
 for n in range(1, 501):
     tree = crr_tree(-1, spot, strike, rate, time, vol, n, american=False, borrow_cost=q)
@@ -57,6 +70,7 @@ df = pd.DataFrame(rows, columns=["N", "Tree"])
 df["BS"] = bs_price
 df["y"] = df["Tree"] - df["BS"]          # y_N = Tree_N - BS
 df["e"] = df["y"].abs()                  # e_N = |y_N|
+print(df.isna().sum())                   # every count should be 0
 df.head()
 
 # %% Plot 1: N vs y_N
