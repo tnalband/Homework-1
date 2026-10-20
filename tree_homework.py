@@ -1,20 +1,35 @@
-# %% [markdown]
-# # Binomial tree (CRR) vs Black-Scholes: European / American puts
+# %% (0) Install ragtop if needed (run once, then restart the kernel)
+# %pip install ragtop
 
-# %% (1) Verify packages  -- should print 113.34
+# %% (1) Verify packages -- should show a price of about 113.34
 import ragtop.blackscholes
-print(ragtop.blackscholes.black_scholes(-1, 625, 612, 0.05, 0.75, 0.62, borrow_cost=0.011))   # ragtop returns a dict
+ragtop.blackscholes.black_scholes(-1, 625, 612, 0.05, 0.75, 0.62, borrow_cost=0.011)
 
-# %% (2) Imports
+# %% (2) Imports and helpers
 import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from ragtop.blackscholes import black_scholes
+
+try:
+    from ragtop.blackscholes import black_scholes as _ragtop_bs
+    HAVE_RAGTOP = True
+except ModuleNotFoundError:
+    HAVE_RAGTOP = False
+    print("ragtop not installed - using the closed-form Black-Scholes formula instead")
+
+
+def bs_formula(callput, spot, strike, rate, time, vol, borrow_cost=0.0):
+    """Closed-form Black-Scholes. callput: +1 call, -1 put. borrow_cost acts as a dividend yield."""
+    Phi = lambda x: 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+    d1 = (math.log(spot / strike) + (rate - borrow_cost + 0.5 * vol ** 2) * time) / (vol * math.sqrt(time))
+    d2 = d1 - vol * math.sqrt(time)
+    return callput * (spot * math.exp(-borrow_cost * time) * Phi(callput * d1)
+                      - strike * math.exp(-rate * time) * Phi(callput * d2))
 
 
 def ragtop_price(res):
-    """Pull the option price out of whatever ragtop returns (it returns a dict)."""
+    """ragtop returns a dict; pull the price out of it."""
     if isinstance(res, dict):
         for key in res:
             if str(key).lower() in ("price", "value", "px", "prices"):
@@ -26,9 +41,15 @@ def ragtop_price(res):
     return float(np.asarray(res).squeeze())
 
 
-# %% CRR binomial tree. Same signature as ragtop.black_scholes, plus `steps` and `american`.
+def bs_price_fn(callput, spot, strike, rate, time, vol, borrow_cost=0.0):
+    """Black-Scholes price from ragtop if installed, otherwise from the closed form."""
+    if HAVE_RAGTOP:
+        return ragtop_price(_ragtop_bs(callput, spot, strike, rate, time, vol, borrow_cost=borrow_cost))
+    return bs_formula(callput, spot, strike, rate, time, vol, borrow_cost)
+
+
+# %% (3) CRR binomial tree. Same signature as ragtop.black_scholes, plus `steps` and `american`.
 def crr_tree(callput, spot, strike, rate, time, vol, steps, american=False, borrow_cost=0.0):
-    """callput: +1 call, -1 put.  borrow_cost acts as a continuous dividend yield."""
     n = steps
     dt = time / n
     up = math.exp(vol * math.sqrt(dt))
@@ -37,18 +58,16 @@ def crr_tree(callput, spot, strike, rate, time, vol, steps, american=False, borr
     p = (growth - down) / (up - down)                # risk-neutral up probability
     disc = math.exp(-rate * dt)
 
-    # Terminal stock prices: j up-moves out of n  ->  spot * up^(2j - n)
     j = np.arange(n + 1)
-    S = spot * np.exp(vol * math.sqrt(dt) * (2 * j - n))
+    S = spot * np.exp(vol * math.sqrt(dt) * (2 * j - n))     # terminal stock prices
     V = np.maximum(callput * (S - strike), 0.0)
 
-    # Roll back through the tree
-    for i in range(n - 1, -1, -1):
+    for i in range(n - 1, -1, -1):                           # roll back through the tree
         V = disc * (p * V[1:] + (1.0 - p) * V[:-1])
         if american:
             j = np.arange(i + 1)
             S = spot * np.exp(vol * math.sqrt(dt) * (2 * j - i))
-            V = np.maximum(V, callput * (S - strike))   # early exercise
+            V = np.maximum(V, callput * (S - strike))        # early exercise
     return float(V[0])
 
 
@@ -58,24 +77,10 @@ for n in (1, 5, 10, 50, 100, 500):
     eu = crr_tree(-1, spot, strike, rate, time, vol, n, american=False, borrow_cost=q)
     am = crr_tree(-1, spot, strike, rate, time, vol, n, american=True, borrow_cost=q)
     print(f"N={n:4d}  European={eu:9.5f}  American={am:9.5f}  American>=European: {am >= eu}")
-print("Black-Scholes European put:", ragtop_price(black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)))
-
-# %% Closed-form Black-Scholes (independent of ragtop) as a cross-check
-def bs_formula(callput, spot, strike, rate, time, vol, borrow_cost=0.0):
-    Phi = lambda x: 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-    d1 = (math.log(spot / strike) + (rate - borrow_cost + 0.5 * vol ** 2) * time) / (vol * math.sqrt(time))
-    d2 = d1 - vol * math.sqrt(time)
-    return callput * (spot * math.exp(-borrow_cost * time) * Phi(callput * d1)
-                      - strike * math.exp(-rate * time) * Phi(callput * d2))
-
+print("Black-Scholes European put:", bs_price_fn(-1, spot, strike, rate, time, vol, borrow_cost=q))
 
 # %% Build the data set: European put, near the money, N = 1..500
-res = black_scholes(-1, spot, strike, rate, time, vol, borrow_cost=q)
-print("ragtop returned:", res)
-bs_ragtop = ragtop_price(res)
-bs_closed = bs_formula(-1, spot, strike, rate, time, vol, borrow_cost=q)
-print("BS ragtop:", bs_ragtop, "| BS closed form:", bs_closed)
-bs_price = bs_ragtop if np.isfinite(bs_ragtop) else bs_closed
+bs_price = bs_price_fn(-1, spot, strike, rate, time, vol, borrow_cost=q)
 rows = []
 for n in range(1, 501):
     tree = crr_tree(-1, spot, strike, rate, time, vol, n, american=False, borrow_cost=q)
@@ -106,13 +111,12 @@ ax.set_title("European put: absolute error vs N (log-log)")
 ax.grid(alpha=0.3, which="both")
 plt.show()
 
-# %% (3) Fit: log e_N against log N
+# %% (4) Fit: log e_N against log N and report the slope
 df["logN"] = np.log(df["N"])
 df["loge"] = np.log(df["e"])
 slope, intercept = np.polyfit(df["logN"], df["loge"], 1)
 print(f"slope = {slope:.4f}, intercept = {intercept:.4f}")
 
-# Optional: show the fitted line on the log-log plot
 fig, ax = plt.subplots(figsize=(9, 5))
 ax.loglog(df["N"], df["e"], lw=0.8, label=r"$e_N$")
 ax.loglog(df["N"], np.exp(intercept) * df["N"] ** slope, "r--", label=f"fit, slope = {slope:.3f}")
